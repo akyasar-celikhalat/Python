@@ -158,10 +158,40 @@ def build_stock(df):
         aggregate_add(stok, r.get(col_bar), r.get(col_amt))
     return stok
 
-def build_single_table(prod, sayim, cons, stok):
+
+def extract_meta(df, barcode_candidates, code_candidates, desc_candidates):
+    """Return two dicts mapping barcode -> code and barcode -> description."""
+    code_map = {}
+    desc_map = {}
+    if df is None:
+        return code_map, desc_map
+    col_bar = find_col(df, barcode_candidates)
+    col_code = find_col(df, code_candidates)
+    col_desc = find_col(df, desc_candidates)
+    for _, r in df.iterrows():
+        bar = r.get(col_bar)
+        if bar is None:
+            continue
+        b = str(bar).strip()
+        if b == '':
+            continue
+        if col_code is not None:
+            c = r.get(col_code)
+            if c is not None and str(c).strip() != '':
+                code_map[b] = str(c).strip()
+        if col_desc is not None:
+            d = r.get(col_desc)
+            if d is not None and str(d).strip() != '':
+                desc_map[b] = str(d).strip()
+    return code_map, desc_map
+
+def build_single_table(prod, sayim, cons, stok, sayim_meta=None, uretim_meta=None, stok_meta=None, cons_meta=None):
     all_codes = set().union(prod.keys(), sayim.keys(), cons.keys(), stok.keys())
     rows = []
     for code in sorted(all_codes):
+        # Barkod kontrolü: "-" tire işareti yoksa veya "M" ile başlıyorsa atla
+        if '-' not in str(code) or str(code).startswith('M'):
+            continue
         s_amt = to_num(sayim.get(code, 0.0))
         p_amt = to_num(prod.get(code, 0.0))
         c_amt = to_num(cons.get(code, 0.0))
@@ -170,23 +200,52 @@ def build_single_table(prod, sayim, cons, stok):
 
         expected = s_amt + p_amt - c_amt
 
-        # flags / computed
-        uretilmeden_tuketilen = max(0.0, c_amt - (p_amt + s_amt))
+        
+        # Eğer sayım ve üretim değeri yoksa (her ikisi de 0) ve tüketim varsa,
+        # "üretilmeden tüketilen" sütununda doğrudan tüketim gösterilsin.
+        if (abs(s_amt) < 1e-9) and (abs(p_amt) < 1e-9) and (c_amt > 0):
+            uretilmeden_tuketilen = c_amt
+        else:
+            uretilmeden_tuketilen = 0.0
         uretimden_fazla_tuketim = max(0.0, c_amt - p_amt) if c_amt > 0 else 0.0
         uretilip_kullanilmayan = max(0.0, p_amt - c_amt)
         stokta_uretilmemis_olan = stok_amt_n if (stok_amt_n is not None and p_amt <= 0 and stok_amt_n > 0) else 0.0
-        stokta_yok_ama_tuketim = c_amt if (stok_amt_n is None and c_amt > 0) else 0.0
+        # Eğer sayım ve üretim değeri yok (0) ve stokta kayıt yok veya 0 ise
+        # ve tüketim varsa, "Stokta Yok Ama Tüketilmiş" sütununa tüketim yazılsın.
+        if (abs(s_amt) < 1e-9) and (abs(p_amt) < 1e-9) and (stok_amt_n is None or abs(stok_amt_n) < 1e-9) and (c_amt > 0):
+            stokta_yok_ama_tuketim = c_amt
+        else:
+            stokta_yok_ama_tuketim = 0.0
         stok_uyusmazligi = None
         if stok_amt_n is not None:
             stok_uyusmazligi = stok_amt_n - expected
+        
+        
+        # Malzeme kodu ve açıklama: öncelik sayım -> üretim -> stok -> tüketim
+        malzeme_kodu = None
+        malzeme_aciklama = None
+        if sayim_meta is not None:
+            malzeme_kodu = sayim_meta[0].get(code) or malzeme_kodu
+            malzeme_aciklama = sayim_meta[1].get(code) or malzeme_aciklama
+        if uretim_meta is not None:
+            malzeme_kodu = malzeme_kodu or uretim_meta[0].get(code)
+            malzeme_aciklama = malzeme_aciklama or uretim_meta[1].get(code)
+        if stok_meta is not None:
+            malzeme_kodu = malzeme_kodu or stok_meta[0].get(code)
+            malzeme_aciklama = malzeme_aciklama or stok_meta[1].get(code)
+        if cons_meta is not None:
+            malzeme_kodu = malzeme_kodu or cons_meta[0].get(code)
+            malzeme_aciklama = malzeme_aciklama or cons_meta[1].get(code)
 
         rows.append({
             'Barkod': code,
-            'Sayım (başlangıç)': s_amt,
-            'Üretim (METRE)': p_amt,
-            'Tüketim (METRE/KG)': c_amt,
+            'Sayım': s_amt,
+            'Üretim': p_amt,
+            'Tüketim': c_amt,
+            'Stok': stok_amt_n,
+            'Malzeme Kodu': malzeme_kodu,
+            'Malzeme Açıklama': malzeme_aciklama,
             'Beklenen Stok (Sayım+Üretim-Tüketim)': expected,
-            'Stok (anlık)': stok_amt_n,
             'Stok Farkı (anlık - beklenen)': stok_uyusmazligi,
             'Üretilmeden Tüketilen': uretilmeden_tuketilen,
             'Üretimden Fazla Tüketilen': uretimden_fazla_tuketim,
@@ -195,6 +254,16 @@ def build_single_table(prod, sayim, cons, stok):
             'Stokta Yok Ama Tüketilmiş': stokta_yok_ama_tuketim
         })
     df = pd.DataFrame(rows)
+    # Malzeme bilgilerini ilk iki sütun yap: 'Malzeme Kodu', 'Malzeme Açıklama'
+    cols = list(df.columns)
+    new_order = []
+    for c in ['Malzeme Kodu', 'Malzeme Açıklama']:
+        if c in cols:
+            new_order.append(c)
+    for c in cols:
+        if c not in new_order:
+            new_order.append(c)
+    df = df[new_order]
     # format numeric columns for Excel (rounded + binlik ayraç olarak nokta)
     numeric_cols = [
         'Sayım (başlangıç)', 'Üretim (METRE)', 'Tüketim (METRE/KG)',
@@ -216,18 +285,11 @@ def main():
     df_tuketim = safe_read(files.get('tuketim'))
     df_stok = safe_read(files.get('stok'))
 
-    # debug: sayım dosyası okundu mu, kolonlar nedir
-    if files.get('sayim'):
-        if df_sayim is None:
-            print(f"Uyarı: Sayım dosyası bulundu ama okunamadı: {files.get('sayim')}")
-        else:
-            print(f"Sayım dosyası (YARI MAMUL) okundu: {files.get('sayim')} - kolonlar: {list(df_sayim.columns)[:40]}")
-
-    # prod_from_sayim = build_prod_from_sayim(df_sayim)
+    # üretim
     prod_from_uretim = build_prod_from_uretim(df_uretim)
-    # toplam üretim: yalnızca üretim dosyasından alınıyor (sayım artık ayrı tutuluyor)
     prod = {k: to_num(v) for k, v in prod_from_uretim.items()}
 
+    # sayım (YARI MAMUL sayfasından alınmış df_sayim)
     sayim = {}
     if df_sayim is not None:
         col_bobin = find_col(df_sayim, ['BOBİN', 'BOBIN', 'Bobin', 'Barkod'])
@@ -240,7 +302,28 @@ def main():
     cons = build_cons_from_tuketim(df_tuketim)
     stok = build_stock(df_stok)
 
-    df_raw, df_report = build_single_table(prod, sayim, cons, stok)
+    # Meta (malzeme kodu/açıklama) çıkar
+    sayim_meta = extract_meta(df_sayim,
+                              ['BOBİN', 'BOBIN', 'BOBIN ', 'Bobin', 'Barkod'],
+                              ['ÜRÜN KODU', 'URUN KODU', 'ÜRÜN KOD', 'URUN_KODU', 'Ürün Kodu'],
+                              ['ÜRÜN AÇIKLAMA', 'URUN ACIKLAMA', 'ÜRÜN AÇIKLAMA', 'ÜRÜN AÇIKLAMA'])
+
+    uretim_meta = extract_meta(df_uretim,
+                               ['ÜRETİLEN BARKOD', 'URETILEN BARKOD', 'BARKOD', 'Barkod'],
+                               ['MALZEME NO', 'MALZEME_NO', 'MALZEME', 'MALZEME NO'],
+                               ['MALZEME ADI', 'MALZEME_ADI', 'MALZEME ADI'])
+
+    stok_meta = extract_meta(df_stok,
+                             ['BARKOD KODU', 'Barkod Kodu', 'BARKOD', 'Barkod'],
+                             ['ÜRÜN KODU', 'URUN KODU', 'Ürün Kodu'],
+                             ['ÜRÜN', 'Ürün', 'ÜRÜN AÇIKLAMA'])
+
+    cons_meta = extract_meta(df_tuketim,
+                             ['GİRİŞ ÜRÜN SAP BARKODU', 'GIRIS URUN SAP BARKODU', 'Barkod', 'BARKOD'],
+                             ['GİRİŞ ÜRÜN KODU', 'GIRIS URUN KODU', 'GIRIS_URUN_KODU'],
+                             ['GİRİŞ ÜRÜN ACIKLAMA', 'GIRIS URUN ACIKLAMA', 'AÇIKLAMA', 'Aciklama'])
+
+    df_raw, df_report = build_single_table(prod, sayim, cons, stok, sayim_meta, uretim_meta, stok_meta, cons_meta)
 
     out_ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     out_file = os.path.join(BASE_DIR, f"stok_kontrol_birlesik_{out_ts}.xlsx")
