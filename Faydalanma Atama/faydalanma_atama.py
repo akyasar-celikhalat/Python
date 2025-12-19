@@ -93,6 +93,45 @@ def to_num(x):
             return 0.0
 
 
+def parse_diameter_mm(text):
+    """Extract diameter in mm from text like 'HT 1.05MM-CT-KY180' or numeric '0.88'."""
+    if text is None:
+        return None
+    s = str(text)
+    import re
+    # try explicit mm pattern
+    m = re.search(r"(\d{1,3}(?:[\.,]\d+)?)[ ]*mm\b", s, flags=re.IGNORECASE)
+    if m:
+        try:
+            return float(m.group(1).replace(',', '.'))
+        except:
+            return None
+    # try pattern like 'HT 1.05MM' or 'HT 1.05MM-CT'
+    m2 = re.search(r"(\d{1,3}(?:[\.,]\d+)?)[ ]*MM", s)
+    if m2:
+        try:
+            return float(m2.group(1).replace(',', '.'))
+        except:
+            return None
+    # try standalone number with decimal (e.g. ' 1.05 ')
+    m3 = re.search(r"\b(\d{1,3}[\.,]\d+)\b", s)
+    if m3:
+        try:
+            return float(m3.group(1).replace(',', '.'))
+        except:
+            return None
+    return None
+
+
+def linear_kg_per_m_from_d_mm(d_mm, density=7850.0):
+    if d_mm is None:
+        return None
+    d_m = float(d_mm) / 1000.0
+    import math
+    area = math.pi * (d_m ** 2) / 4.0
+    return area * density
+
+
 def main():
     files = find_files()
     print('Bulunan dosyalar:', files)
@@ -180,6 +219,163 @@ def main():
     # Summarize unmatched
     unmatched_isemri = list({x for x in unmatched_isemri if x})
     unmatched_barkod = list({x for x in unmatched_barkod if x and x[1]})
+
+    # --- Yeni: STOK_KG ve TUKETIM_KG hesapları (kullanıcı isteğine göre) ---
+    # 1) STOK_KG: 'STOK ÜRÜN TANIMI' sütunundaki çapı parse et ve 'STOK MİKTARI' (metre) ile çarp
+    # 2) TUKETIM_KG: 'KILAVUZ_ÜRÜN_KODU' veya kilavuz eşlemesinden çap al, 'TUKETIM_MIKTARI_KG' (metre) ile çarp
+
+    # stok tanımı sütunu araması (kullanıcının belirttiği isim öncelikli)
+    stok_desc_candidates = ['STOK ÜRÜN TANIMI', 'STOK_ÜRÜN_TANIMI', 'STOK_URUN_TANIMI', 'STOK URUN TANIMI', 'ÜRÜN TANIMI', 'ÜRÜN_AÇIKLAMA']
+    stok_desc_col = None
+    for c in stok_desc_candidates:
+        if c in df_fayd.columns:
+            stok_desc_col = c
+            break
+
+    # stok metre sütunu
+    stok_amount_candidates = ['STOK MİKTARI', 'STOK_MIKTAR', 'STOK_MİKTAR', 'STOK', 'STOK_MIKTARI_METRE']
+    stok_amount_col = find_col(df_fayd, stok_amount_candidates)
+
+    df_fayd['STOK_KG'] = None
+    if stok_desc_col and stok_amount_col:
+        # parse çapı satır satır
+        def stok_row_stokkg(row):
+            desc = row.get(stok_desc_col)
+            d_mm = parse_diameter_mm(desc)
+            if d_mm is None:
+                # fallback: eğer KILAVUZ_ÜRÜN_KODU varsa, deneyebiliriz
+                kprod = row.get('KILAVUZ_ÜRÜN_KODU')
+                if kprod:
+                    d_mm = parse_diameter_mm(kprod)
+            if d_mm is None:
+                return None
+            kg_per_m = linear_kg_per_m_from_d_mm(d_mm)
+            metres = to_num(row.get(stok_amount_col))
+            if metres is None or kg_per_m is None:
+                return None
+            return metres * kg_per_m
+        df_fayd['STOK_KG'] = df_fayd.apply(stok_row_stokkg, axis=1)
+
+    # Tüketim için metre sütunu adını bul
+    cons_amount_col = None
+    if 'TUKETIM_MIKTARI_KG' in df_fayd.columns:
+        cons_amount_col = 'TUKETIM_MIKTARI_KG'
+    else:
+        cons_amount_col = find_col(df_fayd, ['TUKETIM', 'TÜKETİM', 'TUKETIM_MIKTARI', 'TUKETIM_MIKTARI_METRE'])
+
+    df_fayd['TUKETIM_KG'] = None
+    # hazırda varsa kilavuztan oluşturulmuş harita (iş emri -> çap) kullan
+    kil_diameter = {}
+    if 'df_kil' in locals():
+        # df_kil'den numeric 'ÇAP' veya açıklamadan parse et
+        cap_col = find_col(df_kil, ['ÇAP', 'CAP', 'ÇAPI'])
+        for _, r in df_kil.iterrows():
+            key = r.get(col_k_isemri) if col_k_isemri in r else None
+            if pd.isna(key) or not key:
+                continue
+            kkey = str(key).strip()
+            d = None
+            if cap_col:
+                try:
+                    dval = r.get(cap_col)
+                    if pd.notna(dval):
+                        d = float(dval)
+                except Exception:
+                    d = None
+            if d is None:
+                # try parsing from any description columns
+                for cc in r.index:
+                    if isinstance(r.get(cc), str):
+                        d = parse_diameter_mm(r.get(cc))
+                        if d is not None:
+                            break
+            if d is not None:
+                kil_diameter[kkey] = d
+
+    if cons_amount_col:
+        def tuketim_row_kg(row):
+            metres = to_num(row.get(cons_amount_col))
+            if metres is None:
+                return None
+            # if product code begins with DMT -> skip
+            kprod = row.get('KILAVUZ_ÜRÜN_KODU')
+            if kprod and str(kprod).upper().startswith('DMT'):
+                return None
+            # öncelik 1: parse from KILAVUZ_ÜRÜN_KODU field itself
+            d_mm = parse_diameter_mm(row.get('KILAVUZ_ÜRÜN_KODU'))
+            # öncelik 2: use kilavuz eşlemesinden gelen çap (iş emri anahtarlı)
+            if d_mm is None:
+                isemri = row.get('İŞ EMRİ') if 'İŞ EMRİ' in row else row.get('IS EMRI')
+                if isemri is not None:
+                    d_mm = kil_diameter.get(str(isemri).strip())
+            # öncelik 3: parse from genel açıklama sütunu varsa
+            if d_mm is None:
+                for c in ['ÜRÜN AÇIKLAMA', 'ÜRÜN_AÇIKLAMA', 'MALZEME ADI', 'MALZEME_ADI']:
+                    if c in row:
+                        d_mm = parse_diameter_mm(row.get(c))
+                        if d_mm is not None:
+                            break
+            if d_mm is None:
+                return None
+            kg_per_m = linear_kg_per_m_from_d_mm(d_mm)
+            if kg_per_m is None:
+                return None
+            return metres * kg_per_m
+        df_fayd['TUKETIM_KG'] = df_fayd.apply(tuketim_row_kg, axis=1)
+
+    # --- Yeni: STOK_DURUM hesapla (sadece STOK ÜRÜN TANIMI TV/TG ile başlayanlar için) ---
+    df_fayd['STOK_DURUM'] = None
+    stok_name_col = stok_desc_col if stok_desc_col else find_col(df_fayd, ['STOK ÜRÜN TANIMI', 'STOK_ÜRÜN_TANIMI'])
+
+    def determine_stok_durum(row):
+        name = str(row.get(stok_name_col, '') or '')
+        if not name:
+            return None
+        pref = name.strip()[:2].upper()
+        if pref not in ('TV', 'TG'):
+            return None
+        # find diameter
+        d_mm = parse_diameter_mm(name)
+        if d_mm is None:
+            d_mm = parse_diameter_mm(row.get('KILAVUZ_ÜRÜN_KODU'))
+        if d_mm is None and 'kil_diameter' in locals():
+            isemri = row.get('İŞ EMRİ') if 'İŞ EMRİ' in row else row.get('IS EMRI')
+            if isemri is not None:
+                d_mm = kil_diameter.get(str(isemri).strip())
+        if d_mm is None:
+            return None
+        # capacity mapping
+        try:
+            if float(d_mm) <= 2.30:
+                cap = 400.0
+            elif float(d_mm) <= 5.5:
+                cap = 850.0
+            else:
+                cap = 1500.0
+        except Exception:
+            return None
+        stokkg = row.get('STOK_KG')
+        try:
+            stokkg_val = float(stokkg) if stokkg is not None else None
+        except Exception:
+            stokkg_val = None
+        if stokkg_val is None:
+            return None
+        return 'PARÇA' if stokkg_val < 0.25 * cap else 'TAM'
+
+    df_fayd['STOK_DURUM'] = df_fayd.apply(determine_stok_durum, axis=1)
+
+    # --- Yeni sütun: EşMi (STOK ÜRÜN TANIMI ilk 3 karakter == ürün ilk 3 karakter) ---
+    prod_col = find_col(df_fayd, ['ÜRÜN', 'ÜRÜN ADI', 'MALZEME ADI', 'ÜRÜN_ADI', 'MALZEME_ADI'])
+    stok_name_col = stok_desc_col if stok_desc_col else find_col(df_fayd, ['STOK ÜRÜN TANIMI', 'STOK_ÜRÜN_TANIMI', 'STOK URUN TANIMI'])
+
+    def esmi_row(row):
+        left = str(row.get(stok_name_col, '') or '')[:3]
+        right = str(row.get(prod_col, '') or '')[:3]
+        return 'DOĞRU' if left == right and left != '' else 'YANLIŞ'
+
+    df_fayd['EşMi'] = df_fayd.apply(esmi_row, axis=1)
+
 
     now = datetime.now().strftime('%Y%m%d_%H%M%S')
     out_file = os.path.join(BASE_DIR, f'faydalanma_atama_sonuc_{now}.xlsx')
