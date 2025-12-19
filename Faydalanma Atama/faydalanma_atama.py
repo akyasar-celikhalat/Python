@@ -297,10 +297,14 @@ def main():
             metres = to_num(row.get(cons_amount_col))
             if metres is None:
                 return None
-            # if product code begins with DMT -> skip
+            # if product code begins with DMT -> use STOK_KG as tüketim kg
             kprod = row.get('KILAVUZ_ÜRÜN_KODU')
             if kprod and str(kprod).upper().startswith('DMT'):
-                return None
+                stokkg = row.get('STOK_KG')
+                try:
+                    return float(stokkg) if stokkg is not None else None
+                except Exception:
+                    return None
             # öncelik 1: parse from KILAVUZ_ÜRÜN_KODU field itself
             d_mm = parse_diameter_mm(row.get('KILAVUZ_ÜRÜN_KODU'))
             # öncelik 2: use kilavuz eşlemesinden gelen çap (iş emri anahtarlı)
