@@ -1,8 +1,12 @@
 import os
 import glob
+import re
 import pandas as pd
 
 BASE_DIR = os.path.dirname(__file__)
+
+# Eğer True ise stok değeri eksikse 0 ile doldurulur; False ise boş bırakılır
+FILL_EMPTY_STOCK = True
 
 KEYS = {
     'sayim': ['sayim', 'sayım', 'count'],
@@ -245,12 +249,12 @@ def build_single_table(prod, sayim, cons, stok, sayim_meta=None, uretim_meta=Non
             'Stok': stok_amt_n,
             'Malzeme Kodu': malzeme_kodu,
             'Malzeme Açıklama': malzeme_aciklama,
-            'Beklenen Stok (Sayım+Üretim-Tüketim)': expected,
-            'Stok Farkı (anlık - beklenen)': stok_uyusmazligi,
+            'Beklenen Stok': expected,
+            'Stok Farkı': stok_uyusmazligi,
             'Üretilmeden Tüketilen': uretilmeden_tuketilen,
             'Üretimden Fazla Tüketilen': uretimden_fazla_tuketim,
             'Üretilip Kullanılmayan': uretilip_kullanilmayan,
-            'Stokta Üretilmemiş Olan (miktar)': stokta_uretilmemis_olan,
+            'Stokta Üretilmemiş Olan': stokta_uretilmemis_olan,
             'Stokta Yok Ama Tüketilmiş': stokta_yok_ama_tuketim
         })
     df = pd.DataFrame(rows)
@@ -264,18 +268,24 @@ def build_single_table(prod, sayim, cons, stok, sayim_meta=None, uretim_meta=Non
         if c not in new_order:
             new_order.append(c)
     df = df[new_order]
-    # format numeric columns for Excel (rounded + binlik ayraç olarak nokta)
+
+    # Numeric columns: convert to numbers so Excel can compute on them
     numeric_cols = [
-        'Sayım (başlangıç)', 'Üretim (METRE)', 'Tüketim (METRE/KG)',
-        'Beklenen Stok (Sayım+Üretim-Tüketim)', 'Stok (anlık)', 'Stok Farkı (anlık - beklenen)',
+        'Sayım', 'Üretim', 'Tüketim',
+        'Beklenen Stok', 'Stok', 'Stok Farkı',
         'Üretilmeden Tüketilen', 'Üretimden Fazla Tüketilen', 'Üretilip Kullanılmayan',
-        'Stokta Üretilmemiş Olan (miktar)', 'Stokta Yok Ama Tüketilmiş'
+        'Stokta Üretilmemiş Olan', 'Stokta Yok Ama Tüketilmiş'
     ]
-    df_formatted = df.copy()
     for col in numeric_cols:
-        if col in df_formatted.columns:
-            df_formatted[col] = df_formatted[col].apply(lambda x: fmt_num_for_excel(x))
-    return df, df_formatted  # return both raw numeric and formatted display
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Stok eksikse davranış: doldur veya bırak
+    if 'Stok' in df.columns:
+        if FILL_EMPTY_STOCK:
+            df['Stok'] = df['Stok'].fillna(0.0)
+
+    return df, None  # return dataframe (numeric). formatted view not used to avoid strings
 
 def main():
     files = find_files()
@@ -323,13 +333,32 @@ def main():
                              ['GİRİŞ ÜRÜN KODU', 'GIRIS URUN KODU', 'GIRIS_URUN_KODU'],
                              ['GİRİŞ ÜRÜN ACIKLAMA', 'GIRIS URUN ACIKLAMA', 'AÇIKLAMA', 'Aciklama'])
 
-    df_raw, df_report = build_single_table(prod, sayim, cons, stok, sayim_meta, uretim_meta, stok_meta, cons_meta)
+    df_raw, _ = build_single_table(prod, sayim, cons, stok, sayim_meta, uretim_meta, stok_meta, cons_meta)
 
     out_ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     out_file = os.path.join(BASE_DIR, f"stok_kontrol_birlesik_{out_ts}.xlsx")
+
+    # Sütun başlıklarındaki parantez içlerini kaldır
+    df_write = df_raw.copy()
+    df_write.columns = [re.sub(r"\s*\(.*?\)", "", c).strip() if isinstance(c, str) else c for c in df_write.columns]
+
     with pd.ExcelWriter(out_file, engine='openpyxl') as writer:
-        # yazarken hem formatlı hem ham (isteğe göre) - ama tek sayfada formatlı göster
-        df_report.to_excel(writer, sheet_name='Rapor', index=False)
+        df_write.to_excel(writer, sheet_name='Rapor', index=False)
+        # set Excel number format for numeric columns
+        workbook = writer.book
+        worksheet = writer.sheets['Rapor']
+        # map column names to excel col letters
+        from openpyxl.utils import get_column_letter
+        numeric_names = ['Sayım', 'Üretim', 'Tüketim', 'Beklenen Stok', 'Stok', 'Stok Farkı', 'Üretilmeden Tüketilen', 'Üretimden Fazla Tüketilen', 'Üretilip Kullanılmayan', 'Stokta Üretilmemiş Olan', 'Stokta Yok Ama Tüketilmiş']
+        # normalize numeric name matching by checking start of header
+        for idx, col in enumerate(df_write.columns, 1):
+            for nk in numeric_names:
+                if isinstance(col, str) and col.startswith(nk):
+                    col_letter = get_column_letter(idx)
+                    for row in range(2, 2 + len(df_write)):
+                        cell = worksheet[f"{col_letter}{row}"]
+                        cell.number_format = '#,##0'
+                    break
     print(f"İşlem tamam. Tek tablo raporu: {out_file}")
 
 if __name__ == '__main__':
