@@ -173,13 +173,29 @@ def main():
 
     # build consumption map: key = (işemri, barkod) -> sum(miktar)
     cons_map = {}
-    if df_tuk is not None and col_t_barkod and col_t_amt:
+    if df_tuk is not None and col_t_barkod:
+        # locate relevant cols in consumption file
+        out_desc_col = find_col(df_tuk, ['ÇIKIŞ ÜRÜN AÇIKLAMA', 'CIKIS URUN ACIKLAMA', 'ÇIKIŞ_ÜRÜN_AÇIKLAMA', 'CIKIS_URUN_ACIKLAMA'])
+        teyit_col = find_col(df_tuk, ['TEYİT MİKTARI Kg', 'TEYIT MIKTARI Kg', 'TEYIT_MIKTARI_KG', 'TEYIT_MIKTARI'])
+        giris_tuketim_col = find_col(df_tuk, ['GİRİŞ ÜRÜN TÜKETİM MİKTARI Kg', 'GIRIS URUN TUKETIM MIKTARI', 'GIRIS_URUN_TUKETIM_MIKTARI'])
         for _, r in df_tuk.iterrows():
             b = r.get(col_t_barkod)
             i = r.get(col_t_isemri) if col_t_isemri else None
-            amt = to_num(r.get(col_t_amt))
             if b is None:
                 continue
+            # if ÇIKIŞ ÜRÜN AÇIKLAMA starts with 'DMT' -> use TEYİT MIKTARI Kg
+            out_desc_val = r.get(out_desc_col) if out_desc_col else None
+            use_teyit = False
+            try:
+                if isinstance(out_desc_val, str) and out_desc_val.strip().upper().startswith('DMT'):
+                    use_teyit = True
+            except Exception:
+                use_teyit = False
+            if use_teyit:
+                amt = to_num(r.get(teyit_col)) if teyit_col else 0.0
+            else:
+                # otherwise use GİRİŞ ÜRÜN TÜKETİM MİKTARI Kg as metres (may be mislabeled)
+                amt = to_num(r.get(giris_tuketim_col)) if giris_tuketim_col else 0.0
             key = (str(i).strip() if i is not None else '', str(b).strip())
             cons_map[key] = cons_map.get(key, 0.0) + amt
 
@@ -295,36 +311,21 @@ def main():
     if cons_amount_col:
         def tuketim_row_kg(row):
             metres = to_num(row.get(cons_amount_col))
+            # yalnızca STOK ÜRÜN TANIMI'ndaki çap ve tüketim metre değerini kullan
             if metres is None:
-                return None
-            # if product code begins with DMT -> use STOK_KG as tüketim kg
-            kprod = row.get('KILAVUZ_ÜRÜN_KODU')
-            if kprod and str(kprod).upper().startswith('DMT'):
-                stokkg = row.get('STOK_KG')
-                try:
-                    return float(stokkg) if stokkg is not None else None
-                except Exception:
-                    return None
-            # öncelik 1: parse from KILAVUZ_ÜRÜN_KODU field itself
-            d_mm = parse_diameter_mm(row.get('KILAVUZ_ÜRÜN_KODU'))
-            # öncelik 2: use kilavuz eşlemesinden gelen çap (iş emri anahtarlı)
+                return 0.0
+            d_mm = None
+            if stok_desc_col and stok_desc_col in row:
+                d_mm = parse_diameter_mm(row.get(stok_desc_col))
             if d_mm is None:
-                isemri = row.get('İŞ EMRİ') if 'İŞ EMRİ' in row else row.get('IS EMRI')
-                if isemri is not None:
-                    d_mm = kil_diameter.get(str(isemri).strip())
-            # öncelik 3: parse from genel açıklama sütunu varsa
-            if d_mm is None:
-                for c in ['ÜRÜN AÇIKLAMA', 'ÜRÜN_AÇIKLAMA', 'MALZEME ADI', 'MALZEME_ADI']:
-                    if c in row:
-                        d_mm = parse_diameter_mm(row.get(c))
-                        if d_mm is not None:
-                            break
-            if d_mm is None:
-                return None
+                return 0.0
             kg_per_m = linear_kg_per_m_from_d_mm(d_mm)
             if kg_per_m is None:
-                return None
-            return metres * kg_per_m
+                return 0.0
+            try:
+                return metres * kg_per_m
+            except Exception:
+                return 0.0
         df_fayd['TUKETIM_KG'] = df_fayd.apply(tuketim_row_kg, axis=1)
 
     # --- Yeni: STOK_DURUM hesapla (sadece STOK ÜRÜN TANIMI TV/TG ile başlayanlar için) ---
@@ -378,19 +379,30 @@ def main():
         right = str(row.get(prod_col, '') or '')[:3]
         return 'DOĞRU' if left == right and left != '' else 'YANLIŞ'
 
-    df_fayd['EşMi'] = df_fayd.apply(esmi_row, axis=1)
+    df_fayd['EŞMİ'] = df_fayd.apply(esmi_row, axis=1)
 
 
     now = datetime.now().strftime('%Y%m%d_%H%M%S')
-    out_file = os.path.join(BASE_DIR, f'faydalanma_atama_sonuc_{now}.xlsx')
+    out_file = os.path.join(BASE_DIR, f'sonuc_{now}.xlsx')
+
+    # rename output columns for clarity (unit-aware names)
+    rename_map = {
+        'KILAVUZ_ÜRÜN_KODU': 'Eslenen_Kilavuz_Urun_Kodu',
+        'TUKETIM_MIKTARI_KG': 'Tuketim_Metre_Orijinal (m)',
+        'TUKETIM_KG': 'Tuketim_KG_Hesaplanmis (kg)',
+        'STOK_KG': 'Stok_KG_Hesaplanmis (kg)',
+        'STOK_DURUM': 'Stok_Durumu (PARCA/TAM)',
+        'EşMi': 'UrunAdı_Eslesme (DOĞRU/YANLIŞ)'
+    }
+    df_out = df_fayd.rename(columns=rename_map)
 
     with pd.ExcelWriter(out_file, engine='openpyxl') as writer:
-        df_fayd.to_excel(writer, sheet_name='Faydalanma_Atama', index=False)
+        df_out.to_excel(writer, sheet_name='Faydalanma_Atama_Sonuclari', index=False)
 
-        # write summaries
-        pd.DataFrame({'unmatched_isemri': unmatched_isemri}).to_excel(writer, sheet_name='Eksik_IsEmri', index=False)
+        # write summaries with clearer sheet names
+        pd.DataFrame({'unmatched_isemri': unmatched_isemri}).to_excel(writer, sheet_name='Eksik_Is_Emri_Listesi', index=False)
         if unmatched_barkod:
-            pd.DataFrame(unmatched_barkod, columns=['IS_EMRI','BARKOD']).to_excel(writer, sheet_name='Eksik_Barkod', index=False)
+            pd.DataFrame(unmatched_barkod, columns=['IS_EMRI', 'BARKOD']).to_excel(writer, sheet_name='Eksik_Barkod_Eslestirmeleri', index=False)
 
     print('İşlem tamam. Rapor kaydedildi:', out_file)
     print('Eksik İş Emirleri sayısı:', len(unmatched_isemri))
