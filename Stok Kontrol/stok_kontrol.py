@@ -216,13 +216,8 @@ def build_single_table(prod, sayim, cons, stok, sayim_meta=None, uretim_meta=Non
         stokta_uretilmemis_olan = stok_amt_n if (stok_amt_n is not None and p_amt <= 0 and stok_amt_n > 0) else 0.0
         # Eğer sayım ve üretim değeri yok (0) ve stokta kayıt yok veya 0 ise
         # ve tüketim varsa, "Stokta Yok Ama Tüketilmiş" sütununa tüketim yazılsın.
-        if (abs(s_amt) < 1e-9) and (abs(p_amt) < 1e-9) and (stok_amt_n is None or abs(stok_amt_n) < 1e-9) and (c_amt > 0):
-            stokta_yok_ama_tuketim = c_amt
-        else:
-            stokta_yok_ama_tuketim = 0.0
-        stok_uyusmazligi = None
-        if stok_amt_n is not None:
-            stok_uyusmazligi = stok_amt_n - expected
+        stokta_yok_ama_tuketim = max(0, c_amt - (s_amt + p_amt))
+        stok_uyusmazligi = (stok_amt_n if stok_amt_n is not None else 0) - expected
         
         
         # Malzeme kodu ve açıklama: öncelik sayım -> üretim -> stok -> tüketim
