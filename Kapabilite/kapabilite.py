@@ -2,7 +2,7 @@ import pandas as pd
 import re
 
 # Excel dosyasını okuma
-file_path = '2025-11.xlsx'
+file_path = '2025-12.xlsx'
 df = pd.read_excel(file_path)
 
 # Tarih sütunlarını birleştirerek yeni bir tarih sütunu oluşturma
