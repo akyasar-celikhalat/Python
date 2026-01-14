@@ -84,7 +84,7 @@ def get_row_status(row):
     stok, diff = row['Stok'], row['Stok Farkı']
     if abs(diff) < 1e-9 and (s + p + c) > 0: return "Tam Mutabakat"
     if p == 0 and c > 0 and s == 0: return "Girişsiz Tüketim"
-    if s > 0 and stok == 0: return "Kayıt Dışı Fiziksel Stok"
+    if s > 0 and p==0 and stok == 0: return "Sayım Stok"
     if stok > 0 and s == 0 and p == 0: return "Sanal Stok (Fizikte Yok)"
     return "Stok Açığı (Eksik)" if diff < 0 else "Stok Fazlası (Artı)"
 
