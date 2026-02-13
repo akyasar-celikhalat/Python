@@ -2,7 +2,7 @@ import pandas as pd
 import re
 
 # Excel dosyasını okuma
-file_path = '2025-12.xlsx'
+file_path = '2026-1.xlsx'
 df = pd.read_excel(file_path)
 
 # Tarih sütunlarını birleştirerek yeni bir tarih sütunu oluşturma
@@ -73,6 +73,6 @@ final_summary.columns = [
 # print(final_summary)
 
 # Sonuçları bir Excel dosyasına yazma (isteğe bağlı)
-output_file_path = 'kapabilite-2025-11.xlsx'
+output_file_path = 'kapabilite-2026-1.xlsx'
 final_summary.to_excel(output_file_path, index=False)
 print(f"Rapor {output_file_path} dosyasına kaydedildi.")

@@ -34,13 +34,13 @@ def geriye_donuk_takip_listele(df, hedef_barkod, ana_mamul_barkod, seviye=0, ust
             "Sorgulanan Ana Mamul": ana_mamul_barkod,  # Çoklu takipte karışmaması için
             "Üretilen Barkod (Çıktı)": hedef_barkod,
             "ÇIKIŞ ÜRÜN ACIKLAMA": c_tanim,
-            "Üretim Akışı (Hiyerarşi)": yeni_yol,
             "Tüketilen Barkod (Giriş)": g_barkod,
             "GİRİŞ ÜRÜN ACIKLAMA": giris_tanim_hiyerarsik,
             "İşlem Miktarı (Kg)": miktar,
             "Proses": proses,
             "Makine No": satir.get('MAKİNE NO', satir.get('MAKINE NO', '')),
-            "Zaman": satir['OLUŞTURMA ZAMANI']
+            "Zaman": satir['OLUŞTURMA ZAMANI'],
+            "Üretim Akışı (Hiyerarşi)": yeni_yol
         })
         
         geriye_donuk_takip_listele(df, g_barkod, ana_mamul_barkod, seviye + 1, yeni_yol, ziyaret_edilen.copy())

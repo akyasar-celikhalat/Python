@@ -1,7 +1,7 @@
 import pandas as pd
 
 # Excel dosyasını okuma
-file_name = 'kardemir.xlsx'
+file_name = 'veri.xlsx'
 df = pd.read_excel(file_name, engine='openpyxl')
 
 # Veri yapısı ve sözlükler
