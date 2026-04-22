@@ -46,7 +46,16 @@ def geriye_donuk_takip_listele(df, hedef_barkod, ana_mamul_barkod, seviye=0, ust
         geriye_donuk_takip_listele(df, g_barkod, ana_mamul_barkod, seviye + 1, yeni_yol, ziyaret_edilen.copy())
 
 # --- ANA PROGRAM ---
-dosya_adi = "veri.xlsx" 
+
+# Dosyayı script ile aynı klasörde ara
+script_dizini = os.path.dirname(os.path.abspath(__file__))
+dosya_adi = os.path.join(script_dizini, "veri.xlsx")
+
+if not os.path.exists(dosya_adi):
+    print(f"❌ HATA: '{dosya_adi}' bulunamadı!")
+    print(f"Lütfen dosyanın şu klasörde olduğundan emin olun: {script_dizini}")
+else:
+    df = pd.read_excel(dosya_adi)
 
 if os.path.exists(dosya_adi):
     df = pd.read_excel(dosya_adi)
