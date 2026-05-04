@@ -11,7 +11,7 @@ def cap_ayikla(tanim):
 
 def rapor_hazirla(df, sorgu_listesi):
     tum_sonuclar = []
-    pi_sayisi = 3.14159
+    pi_sayisi = 3.14159265359
     celik_yogunlugu = 7.85 
 
     for hedef_barkod in sorgu_listesi:
@@ -113,9 +113,11 @@ else:
 
         if sonuc:
             rapor_df = pd.DataFrame(sonuc)
-            kolonlar = ["Sorgulanan Barkod", "Malzeme Tanımı", "İşlem Tipi", "Miktar", "Stok Durumu", "İlişkili Barkod", "İlişkili Tanım", "Zaman", "Makine"]
+            kolonlar = ["Sorgulanan Barkod", "Malzeme Tanımı", "İşlem Tipi", "Miktar", 
+                        #"Stok Durumu", 
+                        "İlişkili Barkod", "İlişkili Tanım", "Zaman", "Makine"]
             
-            # Dosya Adı Oluşturma (İlk barkod + Saat)
+            # Dosya Adı Oluşturma (İlk barkod)
             ana_barkod = sorgu_listesi[0].replace("/", "-").replace("\\", "-")
             cikti_adi = f"Rapor_{ana_barkod}.xlsx"
             cikti_yolu = os.path.join(script_dizini, cikti_adi)
