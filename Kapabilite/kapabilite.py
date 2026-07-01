@@ -5,8 +5,8 @@ import os
 # Excel dosyasını okuma
 script_dizini = os.path.dirname(os.path.abspath(__file__))
 
-file_path = os.path.join(script_dizini,'2026-5.xlsx')
-output_file_path = os.path.join(script_dizini, 'kapabilite-2026-5.xlsx')
+file_path = os.path.join(script_dizini,'2026-6.xlsx')
+output_file_path = os.path.join(script_dizini, 'kapabilite-2026-6.xlsx')
 
 df = pd.read_excel(file_path)
 
