@@ -160,7 +160,7 @@ def main():
         for _, r in df_s.iterrows():
             b = r.get('BOBİN')
             if b:
-                aggregate_add(sayim_map, b, r.get('METRE'))
+                aggregate_add(sayim_map, b, r.get('UZUNLUK'))
                 update_meta(b, r.get('ÜRÜN KODU'), r.get('ÜRÜN AÇIKLAMA'))
 
     # 2. Üretim Verileri
